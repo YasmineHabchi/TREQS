@@ -92,11 +92,151 @@ class End2EndBase(object):
         '''
         raise NotImplementedError
 
-    def app_worker(self):
+    def app_worker(self, question):
         '''
         For application.
         '''
-        raise NotImplementedError
+        
+        max_lens=400
+        """file_path = Your dataset path""""
+        vocab2id, id2vocab = construct_vocab(file_path,
+                    max_size=200000,
+                    mincount=5)
+        vocab_size = len(vocab2id)
+        emb_dim = 128
+        self.args.batch_size = 1
+        
+        self.batch_data = {}
+        cnt = len(vocab2id)
+        
+        quest_tok = word_tokenize(question)
+        dart = quest_tok
+        #print(dart)
+        ext_vocab = {}
+        ext_id2oov = {}
+        for wd in dart:
+            if wd not in vocab2id:
+                ext_vocab[wd] = {}
+        for wd in ext_vocab:
+            ext_vocab[wd] = cnt
+            ext_id2oov[cnt] = wd
+            cnt += 1
+        
+        src_txt = [dart]
+        # UNK
+        dart2id = [
+            vocab2id[wd] if wd in vocab2id
+            else vocab2id['<unk>']
+            for wd in dart]
+        
+        src_idx = [dart2id]
+        
+        dart2id_ex = [
+            vocab2id[wd] if wd in vocab2id
+            else ext_vocab[wd]
+            for wd in dart]
+       
+        src_idx_ex = [dart2id_ex]
+        # UNK mask
+        dart2wt = [0.0 if wd in vocab2id else 1.0 for wd in dart]
+        
+        src_mask_unk = [dart2wt]
+
+        cnt = len(vocab2id)
+        
+        src_max_lens = 400
+        trg_max_lens = 400
+        
+        src_idx = [
+            itm + [vocab2id['<pad>']]*(src_max_lens-len(itm))
+            for itm in src_idx]
+        
+        src_var = Variable(torch.LongTensor(src_idx)).to(self.args.device)
+        
+        src_idx_ex = [itm[:src_max_lens] for itm in src_idx_ex]
+        src_idx_ex = [
+            itm + [vocab2id['<pad>']]*(src_max_lens-len(itm))
+            for itm in src_idx_ex]
+        #src_idx_ex[0][-1] = vocab2id['<stop>']
+        #print("src_idx_ex",src_idx_ex)
+        src_var_ex = torch.LongTensor(src_idx_ex).to(self.args.device)
+        
+        src_mask_unk = [
+            itm[:src_max_lens] for itm in src_mask_unk]
+        src_mask_unk = [
+            itm + [0.0]*(src_max_lens-len(itm))
+            for itm in src_mask_unk]
+        src_mask_unk = Variable(
+            torch.FloatTensor(src_mask_unk)).to(self.args.device)
+
+        src_mask_pad = Variable(torch.FloatTensor(src_idx)).to(self.args.device)
+        src_mask_pad[src_mask_pad
+                               != float(vocab2id['<pad>'])] = -1.0
+        src_mask_pad[src_mask_pad
+                               == float(vocab2id['<pad>'])] = 0.0
+        src_mask_pad = -1.0*src_mask_pad
+        self.batch_data['src_mask_pad'] = src_mask_pad
+        self.batch_data['vocab2id'] = vocab2id
+        self.batch_data['batch_size'] = 1
+        self.batch_data['trg_seq_len'] = 1
+        self.batch_data['vocab_size'] = 2353
+        self.batch_data['src_seq_len'] = 400
+        self.batch_data['src_var'] = src_var
+        self.batch_data['id2vocab'] = id2vocab
+        self.batch_data['src_mask_unk'] = src_mask_unk
+        self.batch_data['ext_id2oov'] = ext_id2oov
+        self.batch_data['src_txt'] = src_txt
+        
+        
+        ques_id = []
+        for e in quest_tok:
+            if e in vocab2id:
+                ques_id.append(int(vocab2id[e]))
+                
+            else:
+                ques_id.append(int(vocab2id['<unk>']))
+        
+        src_text = src_txt
+       
+        batch_size = src_var.size(0)
+        src_seq_len = src_var.size(1)
+        
+        
+        src_emb = self.base_models['embedding'](src_var).to(self.args.device)
+        pipe_data = {}
+        self.pipe_data['encoder'] = {}
+        self.pipe_data['encoder']['src_emb'] = src_emb
+        
+        self.pipe_data['decoderA'] = {}
+        hy_encoder, (ht_encoder, ct_encoder) = self.base_models['encoder'](src_emb)
+        src_enc, hidden_encoder = hy_encoder, (ht_encoder, ct_encoder)
+        self.pipe_data['encoder']['src_enc'] = src_enc
+        enhy = hy_encoder
+        (decoder_h0, decoder_c0) = self.base_models['encoder2decoder'](hidden_encoder)
+        trg_hidden0 = (decoder_h0, decoder_c0)
+        past_attn=Variable(torch.ones(1, src_seq_len
+        )/float(src_seq_len)).to(self.args.device)
+        
+        past_dech = Variable(torch.zeros(1, 1)).to(self.args.device)
+        self.pipe_data['decoderB'] = {}
+        h_attn= Variable(torch.zeros(self.args.batch_size,self.args.trg_hidden_dim)).to(self.args.device)
+        output_ = []
+        accu_attn = []
+        genprb = []
+        
+        self.beam_search()
+        try:
+            myseq = self.word_copy()
+        except: 
+            print('Running without manually word copying.')
+            myseq = torch.cat(self.beam_data[0][0], 0)
+            myseq = myseq.data.cpu().numpy().tolist()
+            myseq = [self.batch_data['id2vocab'][idx] for idx in myseq]
+
+        
+        pred = ' '.join(myseq)
+        print(pred)
+        return(pred[:-6])
 
     def train(self):
         '''
@@ -463,4 +603,5 @@ class End2EndBase(object):
             self.base_models[model_name].eval()
         with torch.no_grad():
             while 1:
-                self.app_worker()
+                sql_query=self.app_worker(question)
+                return (sql_query)

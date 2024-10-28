@@ -2,11 +2,15 @@
 @author Ping Wang and Tian Shi
 Please contact ping@vt.edu or tshi@vt.edu
 '''
+import uvicorn
 import argparse
 import torch
-
+from model import modelABS
 from LeafNATS.utils.utils import str2bool
-
+from LeafNATS.engines.end2end_large import End2EndBase
+from fastapi import FastAPI, HTTPException, Request
+import re
+app = FastAPI()
 parser = argparse.ArgumentParser()
 '''
 Use in the framework and cannot remove.
@@ -57,7 +61,45 @@ parser.add_argument('--step_size', type=int, default=2, help='---')
 parser.add_argument('--step_decay', type=float, default=0.8, help='---')
 
 args = parser.parse_args()
-
+def convert(query):
+    nums = ["0","1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    where_pos = query.find("where")
+    query_list = list(query)
+    
+    i = where_pos
+    while i<len(query):
+        if query_list[i] in ["=", ">", "<"]:
+            if query_list[i + 2] != '"':
+                query_list[i + 3] = "'"
+                query_list.append("'")
+            if query_list[i + 2] == '"':
+                if query_list[i+3] in nums:
+                    query_list[i + 2] = ""
+                else:
+                    query_list[i + 2] = "'"
+            k = i + 3
+            while query_list[k] != '"':
+                k += 1
+            if query_list[k-1] in nums:
+                query_list[k] = ""
+            else:
+                query_list[k] = "'"
+        i += 1
+    
+    return ''.join(query_list)
+def convert_1(chaine):
+    
+    query_list = list(chaine)
+    query_list[-1]="'"
+    cnt = 0
+    for i in range(len(query_list)):
+        if query_list[i] == "=":
+            cnt+=1
+            if cnt == 2:
+                query_list[i+1] = "'"
+    query = ''.join(query_list)
+    return(query)
+        
 if args.task == 'train' or args.task == 'validate' or args.task == 'test':
     from model import modelABS
     model = modelABS(args)
@@ -68,6 +110,31 @@ if args.task == "validate":
 if args.task == "test":
     model.test()
 
+if args.task == "evaluate":
+    from LeafNATS.eval_scripts.eval_pyrouge_v2 import run_pyrouge
+    run_pyrouge(args)
+if args.task == "input":
+   
+    model=modelABS(args)
+    @app.post('/predict')
+    async def predict(request: Request):
+        data = await request.json()
+        question = data['question']
+        try:
+            sql_query = model.app2Go(question)
+            try:
+                sql_query = convert(sql_query)
+            except:
+                sql_query = convert_1(sql_query)
+            print(sql_query)
+            return {"sql_query": sql_query}
+        except Exception as e:
+            print(e)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    if __name__ == '__main__':  
+        uvicorn.run(app, host='127.0.0.1', port=8000)
+    
 if args.task == "evaluate":
     from LeafNATS.eval_scripts.eval_pyrouge_v2 import run_pyrouge
     run_pyrouge(args)
